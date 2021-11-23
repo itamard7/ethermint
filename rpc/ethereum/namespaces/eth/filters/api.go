@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
 	"github.com/tharsis/ethermint/rpc/ethereum/types"
-
+	
 	"github.com/tendermint/tendermint/libs/log"
-
+	client "github.com/cosmos/cosmos-sdk/client"
 	coretypes "github.com/tendermint/tendermint/rpc/core/types"
 	rpcclient "github.com/tendermint/tendermint/rpc/jsonrpc/client"
 	tmtypes "github.com/tendermint/tendermint/types"
@@ -32,7 +31,6 @@ type Backend interface {
 
 	GetTransactionLogs(txHash common.Hash) ([]*ethtypes.Log, error)
 	BloomStatus() (uint64, uint64)
-
 	GetFilteredBlocks(from int64, to int64, bloomIndexes [][]BloomIV, filterAddresses bool) ([]int64, error)
 
 	RPCFilterCap() int32
@@ -60,16 +58,18 @@ type PublicFilterAPI struct {
 	events    *EventSystem
 	filtersMu sync.Mutex
 	filters   map[rpc.ID]*filter
+	ctx client.Context
 }
 
 // NewPublicAPI returns a new PublicFilterAPI instance.
-func NewPublicAPI(logger log.Logger, tmWSClient *rpcclient.WSClient, backend Backend) *PublicFilterAPI {
+func NewPublicAPI(logger log.Logger, tmWSClient *rpcclient.WSClient, backend Backend, ctx client.Context) *PublicFilterAPI {
 	logger = logger.With("api", "filter")
 	api := &PublicFilterAPI{
 		logger:  logger,
 		backend: backend,
 		filters: make(map[rpc.ID]*filter),
 		events:  NewEventSystem(logger, tmWSClient),
+		ctx: ctx,
 	}
 
 	go api.timeoutLoop()
@@ -218,6 +218,67 @@ func (api *PublicFilterAPI) NewPendingTransactions(ctx context.Context) (*rpc.Su
 
 	return rpcSub, err
 }
+
+// NewPendingTransactions creates a subscription that is triggered each time a transaction
+// enters the transaction pool and was signed from one of the transactions this nodes manages.
+func (api *PublicFilterAPI) NewPendingTransactionsFull(ctx context.Context) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+
+	ctx, cancelFn := context.WithTimeout(context.Background(), deadline)
+	defer cancelFn()
+
+	api.events.WithContext(ctx)
+
+	pendingTxSub, cancelSubs, err := api.events.SubscribePendingTxs()
+	if err != nil {
+		return nil, err
+	}
+
+	go func(txsCh <-chan coretypes.ResultEvent) {
+		defer cancelSubs()
+
+		for {
+			select {
+			case ev, ok := <-txsCh:
+				if !ok {
+					api.filtersMu.Lock()
+					delete(api.filters, pendingTxSub.ID())
+					api.filtersMu.Unlock()
+					return
+				}
+
+				data, ok := ev.Data.(tmtypes.EventDataTx)
+				if !ok {
+					api.logger.Debug("event data type mismatch", "type", fmt.Sprintf("%T", ev.Data))
+					continue
+				}
+				
+				tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
+
+				// To keep the original behavior, send a single tx hash in one notification.
+				// TODO(rjl493456442) Send a batch of tx hashes in one notification
+				err = notifier.Notify(rpcSub.ID, tx)
+				if err != nil {
+					return
+				}
+			case <-rpcSub.Err():
+				pendingTxSub.Unsubscribe(api.events)
+				return
+			case <-notifier.Closed():
+				pendingTxSub.Unsubscribe(api.events)
+				return
+			}
+		}
+	}(pendingTxSub.eventCh)
+
+	return rpcSub, err
+}
+
 
 // NewBlockFilter creates a filter that fetches blocks that are imported into the chain.
 // It is part of the filter package since polling goes with eth_getFilterChanges.
