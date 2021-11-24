@@ -20,6 +20,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/tendermint/tendermint/libs/log"
+
+	client "github.com/cosmos/cosmos-sdk/client"
 	coretypes "github.com/tendermint/tendermint/rpc/core/types"
 	rpcclient "github.com/tendermint/tendermint/rpc/jsonrpc/client"
 	tmtypes "github.com/tendermint/tendermint/types"
@@ -71,7 +73,7 @@ type websocketsServer struct {
 	logger   log.Logger
 }
 
-func NewWebsocketsServer(logger log.Logger, tmWSClient *rpcclient.WSClient, cfg config.Config) WebsocketsServer {
+func NewWebsocketsServer(logger log.Logger, tmWSClient *rpcclient.WSClient, cfg config.Config, ctx client.Context) WebsocketsServer {
 	logger = logger.With("api", "websocket-server")
 	_, port, _ := net.SplitHostPort(cfg.JSONRPC.Address)
 
@@ -80,7 +82,7 @@ func NewWebsocketsServer(logger log.Logger, tmWSClient *rpcclient.WSClient, cfg 
 		wsAddr:   cfg.JSONRPC.WsAddress,
 		certFile: cfg.TLS.CertificatePath,
 		keyFile:  cfg.TLS.KeyPath,
-		api:      newPubSubAPI(logger, tmWSClient),
+		api:      newPubSubAPI(logger, tmWSClient, ctx),
 		logger:   logger,
 	}
 }
@@ -291,16 +293,18 @@ type pubSubAPI struct {
 	filtersMu *sync.RWMutex
 	filters   map[rpc.ID]*wsSubscription
 	logger    log.Logger
+	ctx       client.Context
 }
 
 // newPubSubAPI creates an instance of the ethereum PubSub API.
-func newPubSubAPI(logger log.Logger, tmWSClient *rpcclient.WSClient) *pubSubAPI {
+func newPubSubAPI(logger log.Logger, tmWSClient *rpcclient.WSClient, ctx client.Context) *pubSubAPI {
 	logger = logger.With("module", "websocket-client")
 	return &pubSubAPI{
 		events:    rpcfilters.NewEventSystem(logger, tmWSClient),
 		filtersMu: new(sync.RWMutex),
 		filters:   make(map[rpc.ID]*wsSubscription),
 		logger:    logger,
+		ctx:       ctx,
 	}
 }
 
@@ -321,6 +325,8 @@ func (api *pubSubAPI) subscribe(wsConn *wsConn, params []interface{}) (rpc.ID, e
 		return api.subscribeLogs(wsConn, nil)
 	case "newPendingTransactions":
 		return api.subscribePendingTransactions(wsConn)
+	case "newPendingTransactionsFull":
+		return api.subscribePendingTransactionsFull(wsConn)
 	case "syncing":
 		return api.subscribeSyncing(wsConn)
 	default:
@@ -691,6 +697,84 @@ func (api *pubSubAPI) subscribePendingTransactions(wsConn *wsConn) (rpc.ID, erro
 						Params: &SubscriptionResult{
 							Subscription: subID,
 							Result:       txHash,
+						},
+					}
+
+					err = wsSub.wsConn.WriteJSON(res)
+					if err != nil {
+						api.logger.Debug("error writing header, will drop peer", "error", err.Error())
+
+						try(func() {
+							api.filtersMu.Lock()
+							defer api.filtersMu.Unlock()
+
+							if err != websocket.ErrCloseSent {
+								_ = wsSub.wsConn.Close()
+							}
+
+							delete(api.filters, subID)
+							close(wsSub.unsubscribed)
+						}, api.logger, "closing websocket peer sub")
+					}
+				}
+				api.filtersMu.RUnlock()
+			case err, ok := <-errCh:
+				if !ok {
+					api.unsubscribe(subID)
+					return
+				}
+				api.logger.Debug("dropping PendingTransactions WebSocket subscription", subID, "error", err.Error())
+				api.unsubscribe(subID)
+			case <-unsubscribed:
+				return
+			}
+		}
+	}(sub.Event(), sub.Err())
+
+	return subID, nil
+}
+
+
+func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, error) {
+	query := "subscribePendingTransactionsFull"
+	subID := rpc.NewID()
+
+	sub, _, err := api.events.SubscribePendingTxs()
+	if err != nil {
+		return "", errors.Wrap(err, "error creating block filter: %s")
+	}
+
+	unsubscribed := make(chan struct{})
+	api.filtersMu.Lock()
+	api.filters[subID] = &wsSubscription{
+		sub:          sub,
+		wsConn:       wsConn,
+		unsubscribed: unsubscribed,
+		query:        query,
+	}
+	api.filtersMu.Unlock()
+
+	go func(txsCh <-chan coretypes.ResultEvent, errCh <-chan error) {
+		for {
+			select {
+			case ev := <-txsCh:
+				data, _ := ev.Data.(tmtypes.EventDataTx)
+				tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
+
+				api.filtersMu.RLock()
+				for subID, wsSub := range api.filters {
+					subID := subID
+					wsSub := wsSub
+					if wsSub.query != query {
+						continue
+					}
+					// write to ws conn
+					res := &SubscriptionNotification{
+						Jsonrpc: "2.0",
+						Method:  "eth_subscription",
+						Params: &SubscriptionResult{
+							Subscription: subID,
+							Result:       tx,
 						},
 					}
 
