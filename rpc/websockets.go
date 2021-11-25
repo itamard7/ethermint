@@ -24,8 +24,10 @@ import (
 	client "github.com/cosmos/cosmos-sdk/client"
 	coretypes "github.com/tendermint/tendermint/rpc/core/types"
 	rpcclient "github.com/tendermint/tendermint/rpc/jsonrpc/client"
+	
 	tmtypes "github.com/tendermint/tendermint/types"
 
+	rpctypes "github.com/tharsis/ethermint/rpc/ethereum/types"
 	rpcfilters "github.com/tharsis/ethermint/rpc/ethereum/namespaces/eth/filters"
 	"github.com/tharsis/ethermint/rpc/ethereum/types"
 	"github.com/tharsis/ethermint/server/config"
@@ -759,7 +761,17 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 			select {
 			case ev := <-txsCh:
 				data, _ := ev.Data.(tmtypes.EventDataTx)
-				tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
+				//tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
+				
+				ethTx, err := rpctypes.RawTxToEthTx(api.ctx, tmtypes.Tx(data.Tx))
+				
+				//tx := 
+
+				api.logger.Debug("*************Debug print*************** - data", "data", data)
+				api.logger.Debug("*************Debug print*************** - data.Tx", "data", data.Tx)
+				api.logger.Debug("*************Debug print*************** - tmtypes.Tx(data.Tx)", "data", tmtypes.Tx(data.Tx))
+				api.logger.Debug("*************Debug print*************** - RawTxToEthTx", "data", ethTx)
+				
 
 				api.filtersMu.RLock()
 				for subID, wsSub := range api.filters {
@@ -774,7 +786,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						Method:  "eth_subscription",
 						Params: &SubscriptionResult{
 							Subscription: subID,
-							Result:       tx,
+							Result:       ethTx,
 						},
 					}
 
