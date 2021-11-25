@@ -786,7 +786,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						Method:  "eth_subscription",
 						Params: &SubscriptionResult{
 							Subscription: subID,
-							Result:       data,
+							Result:       ethTx,
 						},
 					}
 
