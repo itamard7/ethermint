@@ -765,7 +765,6 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 				
 				ethTx, err := rpctypes.GetEthTransactionByHash(api.ctx, tmtypes.Tx(data.Tx).Hash())
 				
-				
 
 				api.logger.Debug("*************Debug print*************** - data", "data", data)
 				api.logger.Debug("*************Debug print*************** - data.Tx", "data", data.Tx)
@@ -786,7 +785,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						Method:  "eth_subscription",
 						Params: &SubscriptionResult{
 							Subscription: subID,
-							Result:       ethTx,
+							Result:       err.Error(),
 						},
 					}
 
