@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -31,6 +32,36 @@ func RawTxToEthTx(clientCtx client.Context, txBz tmtypes.Tx) (*evmtypes.MsgEther
 		return nil, fmt.Errorf("invalid transaction type %T, expected %T", tx, evmtypes.MsgEthereumTx{})
 	}
 	return ethTx, nil
+}
+
+func GetEthTransactionByHash(clientCtx client.Context, hash []byte) ([]byte, error) {
+	node, err := clientCtx.GetNode()
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := node.Tx(context.Background(), hash, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Can either cache or just leave this out if not necessary
+	block, err := node.Block(context.Background(), &tx.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	blockHash := common.BytesToHash(block.Block.Header.Hash())
+
+	ethTx, err := RawTxToEthTx(clientCtx, tx.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	height := uint64(tx.Height)
+	rpcTx := NewTransaction(ethTx.AsTransaction(), blockHash, height, uint64(tx.Index))
+
+	return json.Marshal(rpcTx)
 }
 
 // NewTransaction returns a transaction that will serialize to the RPC

@@ -763,9 +763,9 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 				data, _ := ev.Data.(tmtypes.EventDataTx)
 				//tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
 				
-				ethTx, err := rpctypes.RawTxToEthTx(api.ctx, tmtypes.Tx(data.Tx))
+				ethTx, err := rpctypes.GetEthTransactionByHash(api.ctx, tmtypes.Tx(data.Tx).Hash())
 				
-				//tx := 
+				
 
 				api.logger.Debug("*************Debug print*************** - data", "data", data)
 				api.logger.Debug("*************Debug print*************** - data.Tx", "data", data.Tx)
