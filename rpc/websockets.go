@@ -759,8 +759,8 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 			select {
 			case ev := <-txsCh:
 				data, _ := ev.Data.(tmtypes.EventDataTx)
-				tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
-
+				//tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
+				//tx := 
 				api.filtersMu.RLock()
 				for subID, wsSub := range api.filters {
 					subID := subID
@@ -774,7 +774,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						Method:  "eth_subscription",
 						Params: &SubscriptionResult{
 							Subscription: subID,
-							Result:       tx,
+							Result:       data,
 						},
 					}
 
