@@ -32,8 +32,11 @@ import (
 	tmtypes "github.com/tendermint/tendermint/types"
 
 	rpcfilters "github.com/tharsis/ethermint/rpc/ethereum/namespaces/eth/filters"
-	"github.com/tharsis/ethermint/rpc/ethereum/types"
+	rpctypes "github.com/tharsis/ethermint/rpc/ethereum/types"
+	ethermint "github.com/tharsis/ethermint/types"
+	
 	"github.com/tharsis/ethermint/server/config"
+	
 	
 	evmtypes "github.com/tharsis/ethermint/x/evm/types"
 )
@@ -391,7 +394,7 @@ func (api *pubSubAPI) subscribeNewHeads(wsConn *wsConn) (rpc.ID, error) {
 					continue
 				}
 
-				header := types.EthHeaderFromTendermint(data.Header)
+				header := rpctypes.EthHeaderFromTendermint(data.Header)
 
 				api.filtersMu.RLock()
 				for subID, wsSub := range api.filters {
@@ -773,12 +776,8 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 
 				
 				var tx2 *evmtypes.MsgEthereumTx
-				pendingTxs, pendingErr := api.backend.PendingTransactions()
-				if pendingErr != nil {
-					return
-				}
-
-
+				pendingTxs, err := api.backend.PendingTransactions()
+				
 				if len(pendingTxs) != 0 {
 					for _, tx := range pendingTxs {
 						msg, err := evmtypes.UnwrapEthereumMsg(tx)
@@ -793,6 +792,19 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						}
 					}
 				}
+				if (tx2 == nil) {
+					return;
+				}
+
+				chainIDEpoch, err := ethermint.ParseChainID(api.ctx.ChainID)
+				
+				rpctx, err := rpctypes.NewTransactionFromMsg(
+					tx2,
+					common.Hash{},
+					uint64(0),
+					uint64(0),
+					chainIDEpoch,
+				)
 				
 
 				api.logger.Debug("*************Debug print*************** - data", "data", data)
@@ -814,7 +826,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						Method:  "eth_subscription",
 						Params: &SubscriptionResult{
 							Subscription: subID,
-							Result:       tx2,
+							Result:       rpctx,
 						},
 					}
 
