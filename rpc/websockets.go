@@ -18,8 +18,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/cosmos/cosmos-sdk/server"
+	
+	
 
 	"github.com/tendermint/tendermint/libs/log"
+	"github.com/tharsis/ethermint/rpc/ethereum/backend"
 
 	client "github.com/cosmos/cosmos-sdk/client"
 	coretypes "github.com/tendermint/tendermint/rpc/core/types"
@@ -27,10 +31,10 @@ import (
 	
 	tmtypes "github.com/tendermint/tendermint/types"
 
-	rpctypes "github.com/tharsis/ethermint/rpc/ethereum/types"
 	rpcfilters "github.com/tharsis/ethermint/rpc/ethereum/namespaces/eth/filters"
 	"github.com/tharsis/ethermint/rpc/ethereum/types"
 	"github.com/tharsis/ethermint/server/config"
+	
 	evmtypes "github.com/tharsis/ethermint/x/evm/types"
 )
 
@@ -75,7 +79,7 @@ type websocketsServer struct {
 	logger   log.Logger
 }
 
-func NewWebsocketsServer(logger log.Logger, tmWSClient *rpcclient.WSClient, cfg config.Config, ctx client.Context) WebsocketsServer {
+func NewWebsocketsServer(logger log.Logger, tmWSClient *rpcclient.WSClient, cfg config.Config, ctx client.Context, ctxx * server.Context) WebsocketsServer {
 	logger = logger.With("api", "websocket-server")
 	_, port, _ := net.SplitHostPort(cfg.JSONRPC.Address)
 
@@ -84,7 +88,7 @@ func NewWebsocketsServer(logger log.Logger, tmWSClient *rpcclient.WSClient, cfg 
 		wsAddr:   cfg.JSONRPC.WsAddress,
 		certFile: cfg.TLS.CertificatePath,
 		keyFile:  cfg.TLS.KeyPath,
-		api:      newPubSubAPI(logger, tmWSClient, ctx),
+		api:      newPubSubAPI(logger, tmWSClient, ctx, ctxx),
 		logger:   logger,
 	}
 }
@@ -296,17 +300,19 @@ type pubSubAPI struct {
 	filters   map[rpc.ID]*wsSubscription
 	logger    log.Logger
 	ctx       client.Context
+	backend backend.Backend 
 }
 
 // newPubSubAPI creates an instance of the ethereum PubSub API.
-func newPubSubAPI(logger log.Logger, tmWSClient *rpcclient.WSClient, ctx client.Context) *pubSubAPI {
+func newPubSubAPI(logger log.Logger, tmWSClient *rpcclient.WSClient, ctx client.Context, ctxx *server.Context) *pubSubAPI {
 	logger = logger.With("module", "websocket-client")
 	return &pubSubAPI{
 		events:    rpcfilters.NewEventSystem(logger, tmWSClient),
 		filtersMu: new(sync.RWMutex),
 		filters:   make(map[rpc.ID]*wsSubscription),
 		logger:    logger,
-		ctx:       ctx,
+		ctx:       ctx, 
+		backend:   backend.NewEVMBackend(ctxx, logger, ctx),
 	}
 }
 
@@ -762,14 +768,41 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 			case ev := <-txsCh:
 				data, _ := ev.Data.(tmtypes.EventDataTx)
 				//tx, err := api.ctx.TxConfig.TxDecoder()(tmtypes.Tx(data.Tx))
+			
+				txHash := common.BytesToHash(tmtypes.Tx(data.Tx).Hash())
+
 				
-				ethTx, err := rpctypes.GetEthTransactionByHash(api.ctx, tmtypes.Tx(data.Tx).Hash())
+				var tx2 *evmtypes.MsgEthereumTx
+				pendingTxs, pendingErr := api.backend.PendingTransactions()
+				if pendingErr != nil {
+					return
+				}
+
+
+				if len(pendingTxs) != 0 {
+					for _, tx := range pendingTxs {
+						msg, err := evmtypes.UnwrapEthereumMsg(tx)
+						if err != nil {
+							// not ethereum tx
+							continue
+						}
+
+						if msg.Hash == txHash.Hex() {
+							tx2 = msg;
+							break;
+						}
+
+
+
+					}
+					return
+				}
 				
 
 				api.logger.Debug("*************Debug print*************** - data", "data", data)
 				api.logger.Debug("*************Debug print*************** - data.Tx", "data", data.Tx)
 				api.logger.Debug("*************Debug print*************** - tmtypes.Tx(data.Tx)", "data", tmtypes.Tx(data.Tx))
-				api.logger.Debug("*************Debug print*************** - RawTxToEthTx", "data", ethTx)
+				// api.logger.Debug("*************Debug print*************** - RawTxToEthTx", "data", ethTx)
 				
 
 				api.filtersMu.RLock()
@@ -785,7 +818,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 						Method:  "eth_subscription",
 						Params: &SubscriptionResult{
 							Subscription: subID,
-							Result:       err.Error(),
+							Result:       tx2,
 						},
 					}
 

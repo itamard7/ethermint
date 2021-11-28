@@ -26,6 +26,7 @@ func StartJSONRPC(ctx *server.Context, clientCtx client.Context, tmRPCAddr, tmEn
 	apis := rpc.GetRPCAPIs(ctx, clientCtx, tmWsClient, rpcAPIArr)
 
 	for _, api := range apis {
+		
 		if err := rpcServer.RegisterName(api.Namespace, api.Service); err != nil {
 			ctx.Logger.Error(
 				"failed to register service in JSON RPC namespace",
@@ -75,7 +76,7 @@ func StartJSONRPC(ctx *server.Context, clientCtx client.Context, tmRPCAddr, tmEn
 
 	// allocate separate WS connection to Tendermint
 	tmWsClient = ConnectTmWS(tmRPCAddr, tmEndpoint, ctx.Logger)
-	wsSrv := rpc.NewWebsocketsServer(ctx.Logger, tmWsClient, config, clientCtx)
+	wsSrv := rpc.NewWebsocketsServer(ctx.Logger, tmWsClient, config, clientCtx, ctx)
 	wsSrv.Start()
 	return httpSrv, httpSrvDone, nil
 }
