@@ -791,11 +791,7 @@ func (api *pubSubAPI) subscribePendingTransactionsFull(wsConn *wsConn) (rpc.ID, 
 							tx2 = msg;
 							break;
 						}
-
-
-
 					}
-					return
 				}
 				
 
